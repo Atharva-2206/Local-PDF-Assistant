@@ -1,64 +1,29 @@
-import streamlit as st
-import requests
-import uuid
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from api_chat import router as chat_router
+from api_pdf_processor import process_pdf_file
+from pydantic import BaseModel
 
-# Define API URLs
-PDF_PROCESS_API = "http://localhost:8000/process-pdf/"
-CHAT_API = "http://localhost:8001/chat/"
+class PDFProcessResponse(BaseModel):
+    transaction_id: str
+    filename: str
+    message: str
 
-# Streamlit App
-st.title("Local PDF Assistant")
+app = FastAPI()
+app.include_router(chat_router)
 
-# Section for PDF upload and processing
-st.header("Upload a PDF")
-uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-if uploaded_file is not None:
-    # Save the uploaded file locally
-    transaction_id = str(uuid.uuid4())
-    file_path = f"./backend/data/uploads/{transaction_id}_{uploaded_file.name}"
-    with open(file_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-
-    # Show file upload status
-    st.success(f"File uploaded: {uploaded_file.name}")
-
-    # Call the PDF processing API to process the file
+@app.post("/process-pdf/", response_model=PDFProcessResponse)
+def process_pdf(file: UploadFile = File(...)):
     try:
-        response = requests.post(PDF_PROCESS_API, files={"file": uploaded_file})
-        if response.status_code == 200:
-            st.success("PDF processed successfully!")
-            st.text(f"Transaction ID: {response.json()['transaction_id']}")
-        else:
-            st.error(f"Failed to process PDF: {response.text}")
-    except requests.exceptions.RequestException as e:
-        st.error(f"Error connecting to the PDF processing API: {e}")
-
-# Section for Chat with PDF
-st.header("Chat with the Processed PDF")
-
-# Input for the question
-transaction_id_input = st.text_input("Enter the Transaction ID", "")
-question_input = st.text_area("Ask a question based on the PDF content:")
-
-if st.button("Ask Question"):
-    if transaction_id_input and question_input:
-        try:
-            # Make the request to the chat API
-            response = requests.post(
-                CHAT_API,
-                json={
-                    "transaction_id": transaction_id_input,
-                    "question": question_input
-                }
-            )
-
-            if response.status_code == 200:
-                st.success("Answer: ")
-                st.write(response.json()["answer"])
-            else:
-                st.error(f"Error: {response.text}")
-        except requests.exceptions.RequestException as e:
-            st.error(f"Error connecting to the chat API: {e}")
-    else:
-        st.error("Please provide both Transaction ID and Question.")
+        txn_id = process_pdf_file(file)
+        return PDFProcessResponse(transaction_id=txn_id, filename=file.filename, message="PDF processed successfully")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
